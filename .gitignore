@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+*.tsbuildinfo
+/.vite/
+/ChatGPT Image*.png
+/2026年*.png
