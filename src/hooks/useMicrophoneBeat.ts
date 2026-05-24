@@ -9,6 +9,7 @@ type MicrophoneBeatOptions = {
 type MicrophoneBeatState = {
   active: boolean;
   supported: boolean;
+  secureContext: boolean;
   level: number;
   permission: "idle" | "granted" | "denied";
   error: string | null;
@@ -21,6 +22,8 @@ export const useMicrophoneBeat = ({
   threshold,
   onHit,
 }: MicrophoneBeatOptions): MicrophoneBeatState => {
+  const supported = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
+  const secureContext = typeof window !== "undefined" && window.isSecureContext;
   const [active, setActive] = useState(false);
   const [permission, setPermission] = useState<"idle" | "granted" | "denied">("idle");
   const [level, setLevel] = useState(0);
@@ -95,6 +98,20 @@ export const useMicrophoneBeat = ({
     }
     setError(null);
 
+    if (!secureContext) {
+      setPermission("denied");
+      setError("マイク入力にはHTTPSが必要です。iPadでは http://192.168... からはマイクを使えません。");
+      stop();
+      return;
+    }
+
+    if (!supported) {
+      setPermission("denied");
+      setError("このブラウザではマイク入力を開始できません。Safariのマイク許可とHTTPS接続を確認してください。");
+      stop();
+      return;
+    }
+
     try {
       stop();
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -128,7 +145,7 @@ export const useMicrophoneBeat = ({
       setError(caught instanceof Error ? caught.message : "マイクを開始できませんでした。");
       stop();
     }
-  }, [enabled, monitor, stop]);
+  }, [enabled, monitor, secureContext, stop, supported]);
 
   useEffect(() => {
     if (!enabled) {
@@ -140,7 +157,8 @@ export const useMicrophoneBeat = ({
 
   return {
     active,
-    supported: typeof navigator !== "undefined" && Boolean(navigator.mediaDevices),
+    supported,
+    secureContext,
     level,
     permission,
     error,

@@ -1,0 +1,10 @@
+{
+  "name": "リズム道場",
+  "short_name": "リズム道場",
+  "display": "standalone",
+  "orientation": "landscape",
+  "start_url": "/",
+  "scope": "/",
+  "background_color": "#8c612f",
+  "theme_color": "#8c612f"
+}

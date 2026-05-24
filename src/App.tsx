@@ -52,7 +52,7 @@ type ExpectedHit = {
   matched: boolean;
 };
 
-type Screen = "modeSelect" | "basicPresetSelect" | "copyRhythm" | "lesson" | "result" | "records";
+type Screen = "modeSelect" | "basicPresetSelect" | "copyRhythm" | "listenCopy" | "lesson" | "result" | "records";
 type TeacherScreen = "settings" | "scoreBuilder";
 type BasicLessonSelection = {
   meter: BeatCount;
@@ -75,6 +75,8 @@ type CopyRhythmStep = {
 };
 type CopyMode = "practice" | "performance";
 type CopyPlayPhase = "idle" | "countdown" | "playing";
+type ListenCopyPhase = "idle" | "listening" | "ready" | "playing";
+type ListenCopyDifficulty = "easy" | "normal" | "hard";
 type CopyExpectedInput = "microphone" | "camera" | "none";
 type CopyJudgement = "correct" | "miss";
 type CopyResult = CopyRhythmStep & {
@@ -89,9 +91,16 @@ type CopyPerformanceBeat = {
   matched: boolean;
   wrongInput: boolean;
 };
+type ResultMood = "perfect" | "no-miss" | "close" | "retry";
+type ResultComment = {
+  mood: ResultMood;
+  title: string;
+  message: string;
+};
 
 const BUILDER_ACTION_OPTIONS: PatternAction[] = ["clap", "step", "rest"];
 const BUILDER_NOTE_OPTIONS: NoteValue[] = ["quarter", "eighthPair", "half", "rest"];
+const PLAYBACK_TICK_MS = 25;
 const COPY_RHYTHM_BASE_PATTERN: CopyPoseAction[] = [
   "clap",
   "clap",
@@ -110,6 +119,69 @@ const createCopyRhythmPattern = (meter: BeatCount, barCount: number): CopyRhythm
     beat: (index % meter) + 1,
     pose: COPY_RHYTHM_BASE_PATTERN[index % COPY_RHYTHM_BASE_PATTERN.length],
   }));
+};
+
+const LISTEN_COPY_PATTERNS: Record<
+  ListenCopyDifficulty,
+  {
+    label: string;
+    patterns: ("clap" | "rest")[][];
+  }
+> = {
+  easy: {
+    label: "やさしい",
+    patterns: [
+      ["clap", "clap", "clap", "clap"],
+      ["clap", "rest", "clap", "rest"],
+      ["clap", "clap", "rest", "clap"],
+      ["clap", "rest", "rest", "clap"],
+    ],
+  },
+  normal: {
+    label: "ふつう",
+    patterns: [
+      ["clap", "rest", "clap", "clap", "rest", "clap", "rest", "clap"],
+      ["clap", "clap", "rest", "clap", "clap", "rest", "clap", "rest"],
+      ["clap", "rest", "clap", "rest", "clap", "clap", "rest", "clap"],
+      ["rest", "clap", "clap", "rest", "clap", "rest", "clap", "clap"],
+    ],
+  },
+  hard: {
+    label: "むずかしい",
+    patterns: [
+      ["clap", "rest", "rest", "clap", "rest", "clap", "clap", "rest"],
+      ["rest", "clap", "rest", "clap", "clap", "rest", "rest", "clap"],
+      ["clap", "clap", "rest", "rest", "clap", "rest", "clap", "rest"],
+      ["rest", "clap", "clap", "rest", "rest", "clap", "rest", "clap"],
+    ],
+  },
+};
+
+const createListenCopySettings = (
+  current: TeacherSettings,
+  meter: BeatCount,
+  barCount: number,
+  difficulty: ListenCopyDifficulty,
+  patternIndex: number,
+): TeacherSettings => {
+  const totalBeats = meter * barCount;
+  const patternSet = LISTEN_COPY_PATTERNS[difficulty].patterns;
+  const basePattern = patternSet[patternIndex % patternSet.length] ?? patternSet[0];
+  return {
+    ...current,
+    beatsPerBar: meter,
+    inputMode: "microphone",
+    loops: 1,
+    showRhythmGuide: false,
+    pattern: Array.from({ length: totalBeats }, (_, index) => {
+      const action = basePattern[index % basePattern.length];
+      return {
+        id: index,
+        action,
+        note: action === "rest" ? "rest" : "quarter",
+      };
+    }),
+  };
 };
 
 const COPY_POSE_SRC: Record<CopyPoseFrame, string> = {
@@ -183,6 +255,58 @@ const getNoteLabel = (note: NoteValue) => {
 const inputSourceToAction = (source: HitEvent["source"]): Exclude<PatternAction, "rest"> =>
   source === "camera" ? "step" : "clap";
 
+const inputMatchesExpectedAction = (source: HitEvent["source"], expectedAction: Exclude<PatternAction, "rest">) =>
+  inputSourceToAction(source) === expectedAction || (source === "microphone" && expectedAction === "step");
+
+const RESULT_COMMENTS: Record<ResultMood, ResultComment> = {
+  perfect: {
+    mood: "perfect",
+    title: "完璧！すごい！！",
+    message: "ぜんぶぴったり。最後までよく聞いて動けました。",
+  },
+  "no-miss": {
+    mood: "no-miss",
+    title: "ミスなし！ミス0 すばらしい！",
+    message: "ミスなし。次はもっとぴったりをねらえそうです。",
+  },
+  close: {
+    mood: "close",
+    title: "1つミスあり　惜しかったね",
+    message: "ミスは1つだけ。もう一回やればきっといけます。",
+  },
+  retry: {
+    mood: "retry",
+    title: "次がんばろう",
+    message: "リズムをよく見て、聞いて、動いてみましょう。",
+  },
+};
+
+const getResultComment = ({
+  early = 0,
+  late = 0,
+  misses,
+  onTime,
+  totalExpected,
+}: {
+  early?: number;
+  late?: number;
+  misses: number;
+  onTime: number;
+  totalExpected: number;
+}) => {
+  const totalMistakes = early + late + misses;
+  if (totalExpected > 0 && totalMistakes === 0 && onTime === totalExpected) {
+    return RESULT_COMMENTS.perfect;
+  }
+  if (misses === 0) {
+    return RESULT_COMMENTS["no-miss"];
+  }
+  if (totalMistakes === 1) {
+    return RESULT_COMMENTS.close;
+  }
+  return RESULT_COMMENTS.retry;
+};
+
 const MODE_CARDS = [
   {
     id: "basic-rhythm",
@@ -233,7 +357,19 @@ const MODE_CARDS = [
     description: "タンバリンや太鼓など、音の出る教材を使ってリズム活動をします。",
   },
 ];
-const AVAILABLE_MODE_IDS = new Set(["basic-rhythm", "copy-rhythm"]);
+const AVAILABLE_MODE_IDS = new Set(["basic-rhythm", "copy-rhythm", "listen-copy"]);
+
+function ResultCoach({ comment }: { comment: ResultComment }) {
+  return (
+    <div className={`result-coach ${comment.mood}`} aria-live="polite">
+      <img className="result-boy" src={COPY_POSE_SRC.idle} alt="" aria-hidden="true" />
+      <div className="result-speech">
+        <strong>{comment.title}</strong>
+        <p>{comment.message}</p>
+      </div>
+    </div>
+  );
+}
 
 function App() {
   const [settings, setSettings] = useState<TeacherSettings>(() => loadSettings());
@@ -270,15 +406,25 @@ function App() {
   const [copyBarCount, setCopyBarCount] = useState(1);
   const [copyPoseFrame, setCopyPoseFrame] = useState<CopyPoseFrame>("idle");
   const [copyResults, setCopyResults] = useState<CopyResult[]>([]);
+  const [listenMeter, setListenMeter] = useState<BeatCount>(4);
+  const [listenBarCount, setListenBarCount] = useState(1);
+  const [listenDifficulty, setListenDifficulty] = useState<ListenCopyDifficulty>("easy");
+  const [listenPatternIndex, setListenPatternIndex] = useState(0);
+  const [listenPhase, setListenPhase] = useState<ListenCopyPhase>("idle");
+  const [listenHintMode, setListenHintMode] = useState(false);
   const [missingPoseFrames, setMissingPoseFrames] = useState<Partial<Record<CopyPoseFrame, boolean>>>({});
+  const [previewPhraseKey, setPreviewPhraseKey] = useState<string | null>(null);
 
   const sessionStartRef = useRef(0);
   const sessionTimerRef = useRef<number | null>(null);
   const playStartTimeoutRef = useRef<number | null>(null);
   const expectedHitsRef = useRef<ExpectedHit[]>([]);
+  const judgedCategoriesRef = useRef<TimingCategory[]>([]);
+  const missCountRef = useRef(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const noiseBufferRef = useRef<AudioBuffer | null>(null);
   const countdownTimerRef = useRef<number | null>(null);
+  const previewIntervalRef = useRef<number | null>(null);
   const copyIntervalRef = useRef<number | null>(null);
   const copyTimeoutRefs = useRef<number[]>([]);
   const copyCountdownIntervalRef = useRef<number | null>(null);
@@ -327,6 +473,7 @@ function App() {
   useEffect(() => {
     return () => {
       cleanupSession();
+      cleanupPreview(false);
       cleanupCopyRhythm();
       microphone.stop();
       camera.stop();
@@ -353,10 +500,7 @@ function App() {
 
   const judgeWindows = getJudgeWindows(settings.difficulty);
 
-  const summary = useMemo(
-    () => summarizeResults(judgedCategories, expectedHitsRef.current.length, capturedHits.length),
-    [capturedHits.length, judgedCategories],
-  );
+  const summary = summarizeResults(judgedCategories, expectedHitsRef.current.length, capturedHits.length);
 
   const activePreset = getPresetByMeter(selectedMeter);
   const currentLessonPreset = getPresetByMeter(currentLessonSelection.meter);
@@ -366,6 +510,10 @@ function App() {
   const currentLessonPhrase =
     currentLessonLevel.phrases[currentLessonPhraseIndex] ?? currentLessonLevel.phrases[0];
   const copyPattern = useMemo(() => createCopyRhythmPattern(copyMeter, copyBarCount), [copyBarCount, copyMeter]);
+  const listenSettings = useMemo(
+    () => createListenCopySettings(settings, listenMeter, listenBarCount, listenDifficulty, listenPatternIndex),
+    [listenBarCount, listenDifficulty, listenMeter, listenPatternIndex, settings],
+  );
   const currentPlayer = players.find((player) => player.id === currentPlayerId) ?? null;
 
   function cleanupSession() {
@@ -380,6 +528,16 @@ function App() {
     if (countdownTimerRef.current) {
       window.clearInterval(countdownTimerRef.current);
       countdownTimerRef.current = null;
+    }
+  }
+
+  function cleanupPreview(updateState = true) {
+    if (previewIntervalRef.current) {
+      window.clearInterval(previewIntervalRef.current);
+      previewIntervalRef.current = null;
+    }
+    if (updateState) {
+      setPreviewPhraseKey(null);
     }
   }
 
@@ -399,6 +557,14 @@ function App() {
     copyTimeoutRefs.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
     copyTimeoutRefs.current = [];
     copyPerformanceBeatRef.current.active = false;
+  }
+
+  function resetEvaluation() {
+    expectedHitsRef.current = [];
+    judgedCategoriesRef.current = [];
+    missCountRef.current = 0;
+    setJudgedCategories([]);
+    setMissCount(0);
   }
 
   function handleAddPlayer() {
@@ -436,6 +602,8 @@ function App() {
       return;
     }
 
+    const finalSummary = summarizeResults(judgedCategoriesRef.current, expectedHitsRef.current.length, capturedHits.length);
+    const finalMisses = missCountRef.current;
     saveAttempt({
       id: createAttemptId(),
       mode: "basic-rhythm",
@@ -444,12 +612,12 @@ function App() {
       levelId: currentLessonSelection.levelId,
       levelTitle: currentLessonLevel.title,
       phraseIndex: currentLessonPhraseIndex,
-      onTime: summary.onTime,
-      early: summary.early,
-      late: summary.late,
-      misses: missCount,
-      totalExpected: summary.totalExpected,
-      cleared: isBasicCleared(summary, missCount),
+      onTime: finalSummary.onTime,
+      early: finalSummary.early,
+      late: finalSummary.late,
+      misses: finalMisses,
+      totalExpected: finalSummary.totalExpected,
+      cleared: isBasicCleared(finalSummary, finalMisses),
     });
   }
 
@@ -465,6 +633,28 @@ function App() {
       misses: results.length - correct,
       totalExpected: copyPattern.length,
       cleared: results.length === copyPattern.length && correct === copyPattern.length,
+    });
+  }
+
+  function saveListenCopyAttempt() {
+    if (selectedMode.id !== "listen-copy") {
+      return;
+    }
+
+    const finalSummary = summarizeResults(judgedCategoriesRef.current, expectedHitsRef.current.length, capturedHits.length);
+    const finalMisses = missCountRef.current;
+    saveAttempt({
+      id: createAttemptId(),
+      mode: "listen-copy",
+      playedAt: new Date().toISOString(),
+      meter: listenMeter,
+      barCount: listenBarCount,
+      onTime: finalSummary.onTime,
+      early: finalSummary.early,
+      late: finalSummary.late,
+      misses: finalMisses,
+      totalExpected: finalSummary.totalExpected,
+      cleared: isBasicCleared(finalSummary, finalMisses),
     });
   }
 
@@ -518,6 +708,7 @@ function App() {
 
   function startCopyRhythm() {
     cleanupSession();
+    cleanupPreview();
     cleanupCopyRhythm();
     setCopyIsPlaying(true);
     setCopyMode("practice");
@@ -529,15 +720,19 @@ function App() {
     setFeedback({ text: "見本のポーズを見て、同じタイミングでまねします。", tone: "gentle" });
 
     const beatDurationMs = (60 / settings.bpm) * 1000;
+    const startTime = performance.now();
+    let lastStepIndex = 0;
     playCopyPose(copyPattern[0].pose);
 
     copyIntervalRef.current = window.setInterval(() => {
-      setCopyBeatIndex((current) => {
-        const nextIndex = (current + 1) % copyPattern.length;
+      const elapsed = performance.now() - startTime;
+      const nextIndex = Math.floor(elapsed / beatDurationMs) % copyPattern.length;
+      if (nextIndex !== lastStepIndex) {
+        lastStepIndex = nextIndex;
+        setCopyBeatIndex(nextIndex);
         playCopyPose(copyPattern[nextIndex].pose);
-        return nextIndex;
-      });
-    }, beatDurationMs);
+      }
+    }, PLAYBACK_TICK_MS);
   }
 
   function stopCopyRhythm() {
@@ -592,6 +787,7 @@ function App() {
 
   async function startCopyPerformance() {
     cleanupSession();
+    cleanupPreview();
     cleanupCopyRhythm();
     setCopyMode("performance");
     setCopyIsPlaying(true);
@@ -606,13 +802,13 @@ function App() {
     await handlePrepareInputs();
 
     const beatDurationMs = (60 / settings.bpm) * 1000;
-    const leadInMs = 2400;
+    const leadInMs = beatDurationMs * 3;
     const startTime = performance.now() + leadInMs;
     let announcedCount = 3;
     playCountdownCue(announcedCount);
 
     copyCountdownIntervalRef.current = window.setInterval(() => {
-      const remaining = Math.ceil((startTime - performance.now()) / 800);
+      const remaining = Math.ceil((startTime - performance.now()) / beatDurationMs);
       const nextCount = remaining > 0 ? remaining : 0;
       setCopyCountdown(nextCount);
 
@@ -631,10 +827,18 @@ function App() {
       setCopyPlayPhase("playing");
       setFeedback({ text: "本番です。見本と同じタイミングで動きましょう。", tone: "gentle" });
       startCopyPerformanceBeat(0);
+      const performanceStartTime = performance.now();
+      let lastStepIndex = 0;
 
       copyIntervalRef.current = window.setInterval(() => {
+        const elapsed = performance.now() - performanceStartTime;
+        const nextIndex = Math.floor(elapsed / beatDurationMs);
+
+        if (nextIndex === lastStepIndex) {
+          return;
+        }
+
         finishCopyPerformanceBeat();
-        const nextIndex = copyPerformanceBeatRef.current.index + 1;
 
         if (nextIndex >= copyPattern.length) {
           const finalResults = copyResultsRef.current;
@@ -644,12 +848,14 @@ function App() {
           setCopyCountdown(null);
           setCopyPoseFrame("idle");
           saveCopyAttempt(finalResults);
+          setScreen("result");
           setFeedback({ text: "本番が終わりました。結果を見てみましょう。", tone: "success" });
           return;
         }
 
+        lastStepIndex = nextIndex;
         startCopyPerformanceBeat(nextIndex);
-      }, beatDurationMs);
+      }, PLAYBACK_TICK_MS);
     }, leadInMs);
   }
 
@@ -793,6 +999,99 @@ function App() {
     playTambourineCue(accented);
   }
 
+  function startMetronomePreview(bpm: number, beatsPerBar: BeatCount, phraseKey: string) {
+    cleanupPreview();
+    const beatDurationMs = (60 / bpm) * 1000;
+    let beatIndex = 0;
+
+    setPreviewPhraseKey(phraseKey);
+    playCue(880, 80);
+
+    previewIntervalRef.current = window.setInterval(() => {
+      beatIndex = (beatIndex + 1) % beatsPerBar;
+      playCue(beatIndex === 0 ? 880 : 620, 80);
+    }, beatDurationMs);
+  }
+
+  function toggleCurrentLessonPreview() {
+    const phraseKey = "current-lesson-preview";
+    if (previewPhraseKey === phraseKey) {
+      cleanupPreview();
+      return;
+    }
+    startMetronomePreview(settings.bpm, settings.beatsPerBar, phraseKey);
+  }
+
+  function adjustLessonBpm(delta: number) {
+    const nextSettings = {
+      ...settings,
+      bpm: Math.min(160, Math.max(50, settings.bpm + delta)),
+    };
+    setSettings(nextSettings);
+    if (previewPhraseKey === "current-lesson-preview") {
+      startMetronomePreview(nextSettings.bpm, nextSettings.beatsPerBar, "current-lesson-preview");
+    }
+  }
+
+  function startCopyTempoPreview(bpm = settings.bpm) {
+    cleanupPreview();
+    cleanupCopyRhythm();
+    setCopyMode("practice");
+    setCopyPlayPhase("idle");
+    setCopyCountdown(null);
+    setCopyBeatIndex(0);
+    setCopyPoseFrame("idle");
+
+    startMetronomePreview(bpm, copyMeter, "copy-rhythm-preview");
+  }
+
+  function toggleCopyTempoPreview() {
+    if (previewPhraseKey === "copy-rhythm-preview") {
+      cleanupPreview();
+      cleanupCopyRhythm();
+      setCopyBeatIndex(0);
+      setCopyPoseFrame("idle");
+      return;
+    }
+    startCopyTempoPreview();
+  }
+
+  function adjustCopyBpm(delta: number) {
+    const nextSettings = {
+      ...settings,
+      bpm: Math.min(160, Math.max(50, settings.bpm + delta)),
+    };
+    setSettings(nextSettings);
+    if (previewPhraseKey === "copy-rhythm-preview") {
+      startCopyTempoPreview(nextSettings.bpm);
+    }
+  }
+
+  function adjustListenBpm(delta: number) {
+    const nextSettings = {
+      ...settings,
+      bpm: Math.min(160, Math.max(50, settings.bpm + delta)),
+      inputMode: "microphone" as const,
+    };
+    setSettings(nextSettings);
+    if (previewPhraseKey === "listen-tempo-preview") {
+      startMetronomePreview(nextSettings.bpm, listenMeter, "listen-tempo-preview");
+    }
+  }
+
+  function toggleListenTempoPreview() {
+    if (previewPhraseKey === "listen-tempo-preview") {
+      cleanupPreview();
+      return;
+    }
+    startMetronomePreview(settings.bpm, listenMeter, "listen-tempo-preview");
+  }
+
+  function chooseListenPatternIndex(difficulty: ListenCopyDifficulty) {
+    const patternCount = LISTEN_COPY_PATTERNS[difficulty].patterns.length;
+    return Math.floor(Math.random() * patternCount);
+  }
+
   function buildExpectedHits(pattern: PatternStep[], startTime: number, sessionSettings: TeacherSettings): ExpectedHit[] {
     const hits: ExpectedHit[] = [];
     const localBeatDurationMs = (60 / sessionSettings.bpm) * 1000;
@@ -814,15 +1113,21 @@ function App() {
 
   function judgeMisses(now: number) {
     let changed = false;
+    let missedCount = 0;
     expectedHitsRef.current = expectedHitsRef.current.map((expected) => {
       if (!expected.matched && now > expected.time + judgeWindows.accept) {
         changed = true;
-        setMissCount((current) => current + 1);
+        missedCount += 1;
         setFeedback(feedbackForTiming("miss"));
         return { ...expected, matched: true };
       }
       return expected;
     });
+
+    if (missedCount > 0) {
+      missCountRef.current += missedCount;
+      setMissCount(missCountRef.current);
+    }
 
     const allResolved = expectedHitsRef.current.every((expected) => expected.matched);
     if (changed && allResolved && playState === "playing") {
@@ -841,7 +1146,7 @@ function App() {
     const unresolved = expectedHitsRef.current.find(
       (expected) =>
         !expected.matched &&
-        expected.action === inputAction &&
+        inputMatchesExpectedAction(event.source, expected.action) &&
         Math.abs(event.time - expected.time) <= judgeWindows.accept,
     );
 
@@ -868,7 +1173,8 @@ function App() {
     }
 
     unresolved.matched = true;
-    setJudgedCategories((current) => [...current, category]);
+    judgedCategoriesRef.current = [...judgedCategoriesRef.current, category];
+    setJudgedCategories(judgedCategoriesRef.current);
     setFeedback(feedbackForTiming(category));
   }
 
@@ -877,16 +1183,19 @@ function App() {
     setPlayState("finished");
     setCountdown(null);
     setCurrentBeat(0);
+    setJudgedCategories(judgedCategoriesRef.current);
+    setMissCount(missCountRef.current);
     saveBasicAttempt();
+    saveListenCopyAttempt();
     setFeedback({ text: "レッスンが終わりました。", tone: "success" });
     setScreen("result");
   }
 
   function openLesson(sessionSettings: TeacherSettings, message: string) {
     cleanupSession();
+    cleanupPreview();
     setCapturedHits([]);
-    setJudgedCategories([]);
-    setMissCount(0);
+    resetEvaluation();
     setCurrentBeat(0);
     setCountdown(null);
     setPlayState("idle");
@@ -898,21 +1207,19 @@ function App() {
 
   function startSession(sessionSettings: TeacherSettings = settings) {
     cleanupSession();
+    cleanupPreview();
     setCapturedHits([]);
-    setJudgedCategories([]);
-    setMissCount(0);
+    resetEvaluation();
     setCurrentBeat(0);
     setSettings(sessionSettings);
     setScreen("lesson");
     setTeacherScreen(null);
 
-    const leadInMs = 2400;
     const countdownStart = 3;
     const localBeatDurationMs = (60 / sessionSettings.bpm) * 1000;
+    const leadInMs = localBeatDurationMs * countdownStart;
     const patternLength = sessionSettings.pattern.length;
     const sessionStart = performance.now() + leadInMs;
-    sessionStartRef.current = sessionStart;
-    expectedHitsRef.current = buildExpectedHits(sessionSettings.pattern, sessionStart, sessionSettings);
     setPlayState("countdown");
     setFeedback({ text: "3拍前から数えます。譜面を見て準備しましょう。", tone: "gentle" });
     setCountdown(countdownStart);
@@ -920,7 +1227,7 @@ function App() {
 
     let announcedCount = countdownStart;
     countdownTimerRef.current = window.setInterval(() => {
-      const remaining = Math.ceil((sessionStart - performance.now()) / 800);
+      const remaining = Math.ceil((sessionStart - performance.now()) / localBeatDurationMs);
       const nextCount = remaining > 0 ? remaining : 0;
       setCountdown(nextCount);
 
@@ -934,16 +1241,21 @@ function App() {
       setPlayState("playing");
       setCountdown(null);
       setCurrentBeat(0);
+      const actualStartTime = performance.now();
+      sessionStartRef.current = actualStartTime;
+      expectedHitsRef.current = buildExpectedHits(sessionSettings.pattern, actualStartTime, sessionSettings);
       if (sessionSettings.pattern[0]) {
         playRhythmCue(sessionSettings.pattern[0], true);
       }
+      let lastStepIndex = 0;
       sessionTimerRef.current = window.setInterval(() => {
         const now = performance.now();
         const elapsed = now - sessionStartRef.current;
         const stepIndex = Math.floor(elapsed / localBeatDurationMs);
         const totalSteps = patternLength * sessionSettings.loops;
 
-        if (stepIndex >= 1 && stepIndex < totalSteps) {
+        if (stepIndex !== lastStepIndex && stepIndex >= 1 && stepIndex < totalSteps) {
+          lastStepIndex = stepIndex;
           const stepInPhrase = stepIndex % patternLength;
           setCurrentBeat(stepInPhrase);
           const isBarStart = stepInPhrase % sessionSettings.beatsPerBar === 0;
@@ -960,7 +1272,7 @@ function App() {
         if (elapsed >= totalSteps * localBeatDurationMs + judgeWindows.accept) {
           finishSession();
         }
-      }, localBeatDurationMs);
+      }, PLAYBACK_TICK_MS);
     }, leadInMs);
   }
 
@@ -980,9 +1292,201 @@ function App() {
     startSession();
   }
 
+  async function startListenCopyRound() {
+    cleanupSession();
+    cleanupPreview();
+    cleanupCopyRhythm();
+
+    const nextPatternIndex = chooseListenPatternIndex(listenDifficulty);
+    const sessionSettings = createListenCopySettings(settings, listenMeter, listenBarCount, listenDifficulty, nextPatternIndex);
+    setListenPatternIndex(nextPatternIndex);
+    setSettings(sessionSettings);
+    setCapturedHits([]);
+    resetEvaluation();
+    setCurrentBeat(0);
+    setCountdown(null);
+    setPlayState("countdown");
+    setListenPhase("listening");
+    setScreen("listenCopy");
+    setTeacherScreen(null);
+    setFeedback({
+      text: "聞いてください。まだ手拍子はしません。",
+      tone: "gentle",
+    });
+
+    await microphone.requestStart();
+
+    const beatDurationMs = (60 / sessionSettings.bpm) * 1000;
+    const totalSteps = sessionSettings.pattern.length;
+    let stepIndex = 0;
+
+    playRhythmCue(sessionSettings.pattern[0], true);
+    sessionTimerRef.current = window.setInterval(() => {
+      stepIndex += 1;
+      if (stepIndex >= totalSteps) {
+        cleanupSession();
+        setCurrentBeat(0);
+        setListenPhase("ready");
+        setPlayState("idle");
+        setFeedback({ text: "それでは、やってみてください。", tone: "success" });
+        playCountdownCue(1);
+        return;
+      }
+
+      setCurrentBeat(stepIndex);
+      playRhythmCue(sessionSettings.pattern[stepIndex], stepIndex % sessionSettings.beatsPerBar === 0);
+    }, beatDurationMs);
+  }
+
+  function startListenCopyPerformance() {
+    cleanupSession();
+    const sessionSettings = createListenCopySettings(settings, listenMeter, listenBarCount, listenDifficulty, listenPatternIndex);
+    const beatDurationMs = (60 / sessionSettings.bpm) * 1000;
+    const totalSteps = sessionSettings.pattern.length;
+    const startTime = performance.now();
+
+    setCapturedHits([]);
+    resetEvaluation();
+    sessionStartRef.current = startTime;
+    expectedHitsRef.current = buildExpectedHits(sessionSettings.pattern, startTime, sessionSettings);
+    setListenPhase("playing");
+    setPlayState("playing");
+    setCurrentBeat(0);
+    setFeedback({ text: "手拍子でまねしてください。", tone: "gentle" });
+    playCue(880, 55);
+
+    let lastStepIndex = 0;
+    sessionTimerRef.current = window.setInterval(() => {
+      const now = performance.now();
+      const elapsed = now - sessionStartRef.current;
+      const currentStepIndex = Math.min(totalSteps - 1, Math.floor(elapsed / beatDurationMs));
+      if (currentStepIndex !== lastStepIndex) {
+        lastStepIndex = currentStepIndex;
+        setCurrentBeat(currentStepIndex);
+        playCue(currentStepIndex % sessionSettings.beatsPerBar === 0 ? 880 : 620, 55);
+      }
+      judgeMisses(now);
+
+      if (elapsed >= totalSteps * beatDurationMs + judgeWindows.accept) {
+        setListenPhase("idle");
+        finishSession();
+      }
+    }, 60);
+  }
+
+  function getResultTitle() {
+    if (selectedMode.id === "copy-rhythm") {
+      return "まねっこリズム";
+    }
+    if (selectedMode.id === "listen-copy") {
+      return "きいてまね";
+    }
+    return "基礎リズム";
+  }
+
+  function saveResultImage({
+    misses,
+    onTime,
+    pattern,
+    totalExpected,
+  }: {
+    misses: number;
+    onTime: number;
+    pattern?: PatternStep[];
+    totalExpected: number;
+  }) {
+    const canvas = document.createElement("canvas");
+    const width = 1200;
+    const height = pattern ? 760 : 560;
+    const scale = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+    context.scale(scale, scale);
+    context.fillStyle = "#fff7df";
+    context.fillRect(0, 0, width, height);
+    context.fillStyle = "#163047";
+    context.font = "700 34px sans-serif";
+    context.fillText("リズム道場 結果", 48, 70);
+    context.font = "700 24px sans-serif";
+    context.fillText(`プレイヤー: ${currentPlayer?.name ?? "未選択"}`, 48, 118);
+    context.fillText(`モード: ${getResultTitle()}`, 48, 156);
+    context.fillText(new Date().toLocaleString("ja-JP"), 48, 194);
+
+    const cards = [
+      ["ぴったり", String(onTime), "#f4b740"],
+      ["ミス", String(misses), "#6aa9d8"],
+      ["全体", String(totalExpected), "#7ac08a"],
+    ];
+    cards.forEach(([label, value, color], index) => {
+      const x = 48 + index * 250;
+      context.fillStyle = String(color);
+      context.fillRect(x, 240, 210, 128);
+      context.fillStyle = "#163047";
+      context.font = "700 22px sans-serif";
+      context.fillText(String(label), x + 22, 282);
+      context.font = "800 48px sans-serif";
+      context.fillText(String(value), x + 22, 340);
+    });
+
+    if (pattern) {
+      context.fillStyle = "#163047";
+      context.font = "800 28px sans-serif";
+      context.fillText("正解の譜面", 48, 435);
+
+      const scoreX = 48;
+      const scoreY = 470;
+      const scoreW = width - 96;
+      const stepW = scoreW / pattern.length;
+      context.strokeStyle = "#486579";
+      context.lineWidth = 2;
+      for (let line = 0; line < 5; line += 1) {
+        const y = scoreY + 32 + line * 24;
+        context.beginPath();
+        context.moveTo(scoreX, y);
+        context.lineTo(scoreX + scoreW, y);
+        context.stroke();
+      }
+
+      pattern.forEach((step, index) => {
+        const centerX = scoreX + stepW * index + stepW / 2;
+        context.fillStyle = "#8d5a16";
+        context.font = "700 18px sans-serif";
+        context.fillText(String(index + 1), centerX - 6, scoreY + 22);
+        context.fillStyle = "#163047";
+        context.font = "800 44px sans-serif";
+        context.textAlign = "center";
+        context.fillText(step.action === "rest" ? "休" : step.action === "step" ? "足" : "手", centerX, scoreY + 110);
+        context.textAlign = "start";
+      });
+    }
+
+    const link = document.createElement("a");
+    link.href = canvas.toDataURL("image/png");
+    link.download = `rhythm-dojo-result-${new Date().toISOString().slice(0, 10)}.png`;
+    link.click();
+  }
+
   function handleResetSettings() {
     setSettings(defaultSettings);
     setFeedback({ text: "設定を初期状態に戻しました。", tone: "gentle" });
+  }
+
+  function startBasicPhrase(levelId: string, phraseIndex: number) {
+    cleanupPreview();
+    setSelectedLevelId(levelId);
+    setCurrentLessonSelection({ meter: activePreset.meter, levelId });
+    setCurrentLessonPhraseIndex(phraseIndex);
+    openLesson(
+      createSettingsFromBasicLevel(activePreset.meter, levelId, settings, phraseIndex),
+      `${activePreset.title} の譜面 ${phraseIndex + 1} を始める準備ができました。`,
+    );
   }
 
   function applyMode(modeId: string) {
@@ -1001,6 +1505,7 @@ function App() {
 
     if (modeId === "copy-rhythm") {
       cleanupSession();
+      cleanupPreview();
       cleanupCopyRhythm();
       setCopyIsPlaying(false);
       setCopyMode("practice");
@@ -1013,6 +1518,25 @@ function App() {
       setScreen("copyRhythm");
       setTeacherScreen(null);
       setFeedback({ text: "見本のポーズを見て、リズムに合わせてまねします。", tone: "gentle" });
+      return;
+    }
+
+    if (modeId === "listen-copy") {
+      cleanupSession();
+      cleanupPreview();
+      cleanupCopyRhythm();
+      setListenPhase("idle");
+      setCurrentBeat(0);
+      setCapturedHits([]);
+      resetEvaluation();
+      setPlayState("idle");
+      setSettings((current) => ({ ...current, inputMode: "microphone" }));
+      setScreen("listenCopy");
+      setTeacherScreen(null);
+      setFeedback({
+        text: "スタートを押したら、まずお手本を聞きます。",
+        tone: "gentle",
+      });
       return;
     }
 
@@ -1235,9 +1759,15 @@ function App() {
                 <p className="mode-learn">目的: {level.goals.join(" / ")}</p>
                 <div className="preset-example-list">
                   {level.phrases.map((phrase, phraseIdx) => (
-                    <div className="preset-example" key={`${level.id}-${phraseIdx}`}>
-                      {formatPhrase(phrase, activePreset.meter)}
-                    </div>
+                    <button
+                      className="preset-example preset-example-button"
+                      key={`${level.id}-${phraseIdx}`}
+                      onClick={() => startBasicPhrase(level.id, phraseIdx)}
+                      type="button"
+                    >
+                      <span className="preset-example-number">譜面 {phraseIdx + 1}</span>
+                      <span>{formatPhrase(phrase, activePreset.meter)}</span>
+                    </button>
                   ))}
                 </div>
                 <button
@@ -1257,6 +1787,196 @@ function App() {
                 </button>
               </article>
             ))}
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  function renderListenCopy() {
+    const phaseLabel =
+      listenPhase === "listening"
+        ? "きいているところ"
+        : listenPhase === "ready"
+          ? "はじめるところ"
+        : listenPhase === "playing"
+          ? "まねするところ"
+          : "じゅんび";
+
+    return (
+      <main className="screen screen-lesson listen-copy-screen">
+        <section className="wire-box lesson-shell listen-copy-shell">
+          <div className="wire-box-header">
+            <div>
+              <p className="wire-label">LISTEN AND COPY</p>
+              <p className="eyebrow">Ear Training</p>
+              <h1>きいてまねモード</h1>
+              <p className="subtitle">音だけをよく聞いて、同じリズムを手拍子でまねします。</p>
+            </div>
+            <button
+              className="ghost-button"
+              onClick={() => {
+                cleanupSession();
+                setListenPhase("idle");
+                setPlayState("idle");
+                setScreen("modeSelect");
+              }}
+              type="button"
+            >
+              トップへ戻る
+            </button>
+          </div>
+
+          <div className="listen-copy-layout">
+            <section className="listen-copy-stage">
+              <ResultCoach
+                comment={{
+                  mood: "no-miss",
+                  title: "よく聞いてまねしてね",
+                  message: "さいしょは聞くだけ。そのあと、手拍子だけで同じリズムを返しましょう。",
+                }}
+              />
+
+              <div className={`listen-phase-card ${listenPhase}`}>
+                <span>{phaseLabel}</span>
+                <strong>
+                  {listenPhase === "listening"
+                    ? "聞いてください"
+                    : listenPhase === "ready"
+                      ? "それでは、やってみてください"
+                    : listenPhase === "playing"
+                      ? "手拍子でまねしてください"
+                      : "スタートで音がなります"}
+                </strong>
+                {listenHintMode ? (
+                  <div className="listen-beat-dots" aria-label="拍の進み">
+                    {listenSettings.pattern.map((step, index) => (
+                      <span
+                        className={`${index === currentBeat && (listenPhase === "listening" || listenPhase === "playing") ? "active" : ""} ${
+                          step.action === "rest" ? "rest" : "clap"
+                        }`}
+                        key={step.id}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              <span className={`feedback-badge ${feedback.tone}`}>{feedback.text}</span>
+            </section>
+
+            <aside className="copy-control-panel listen-copy-controls">
+              <div className="status-card gold lesson-control-card">
+                <span>テンポ</span>
+                <strong>{settings.bpm} BPM</strong>
+                {listenPhase === "idle" ? (
+                  <div className="inline-control-row">
+                    <button className="ghost-button small" onClick={() => adjustListenBpm(-2)} type="button">
+                      -2
+                    </button>
+                    <button className="ghost-button small" onClick={() => adjustListenBpm(2)} type="button">
+                      +2
+                    </button>
+                    <button
+                      className={previewPhraseKey === "listen-tempo-preview" ? "ghost-button small preview-stop-button" : "ghost-button small"}
+                      onClick={toggleListenTempoPreview}
+                      type="button"
+                    >
+                      {previewPhraseKey === "listen-tempo-preview" ? "STOP" : "確認"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="copy-adjust-panel">
+                <label className="field">
+                  <span>難易度</span>
+                  <select
+                    disabled={listenPhase !== "idle"}
+                    onChange={(event) => {
+                      const nextDifficulty = event.target.value as ListenCopyDifficulty;
+                      setListenDifficulty(nextDifficulty);
+                      setListenPatternIndex(0);
+                      setCurrentBeat(0);
+                    }}
+                    value={listenDifficulty}
+                  >
+                    <option value="easy">やさしい（4種類）</option>
+                    <option value="normal">ふつう（4種類）</option>
+                    <option value="hard">むずかしい（4種類）</option>
+                  </select>
+                </label>
+
+                <label className="field">
+                  <span>拍子</span>
+                  <select
+                    disabled={listenPhase !== "idle"}
+                    onChange={(event) => {
+                      const nextMeter = Number(event.target.value);
+                      setListenMeter(nextMeter === 2 || nextMeter === 3 || nextMeter === 8 ? nextMeter : 4);
+                      setListenPatternIndex(0);
+                      setCurrentBeat(0);
+                    }}
+                    value={listenMeter}
+                  >
+                    <option value={2}>2拍子</option>
+                    <option value={3}>3拍子</option>
+                    <option value={4}>4拍子</option>
+                    <option value={8}>8拍子</option>
+                  </select>
+                </label>
+
+                <label className="field">
+                  <span>小節数</span>
+                  <select
+                    disabled={listenPhase !== "idle"}
+                    onChange={(event) => {
+                      setListenBarCount(Number(event.target.value));
+                      setListenPatternIndex(0);
+                      setCurrentBeat(0);
+                    }}
+                    value={listenBarCount}
+                  >
+                    <option value={1}>1小節</option>
+                    <option value={2}>2小節</option>
+                    <option value={3}>3小節</option>
+                    <option value={4}>4小節</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="copy-input-status">
+                <div className="copy-input-status-item">
+                  <span>手拍子</span>
+                  <strong>
+                    {microphone.active ? "有効" : microphone.permission === "denied" ? "許可が必要" : "待機中"}
+                  </strong>
+                  <small>
+                    音量 {microphone.level.toFixed(2)} / しきい値 {settings.clapThreshold.toFixed(2)}
+                  </small>
+                  {microphone.error ? <small className="error-text">{microphone.error}</small> : null}
+                </div>
+              </div>
+
+              <button
+                className={listenHintMode ? "ghost-button hint-toggle active" : "ghost-button hint-toggle"}
+                onClick={() => setListenHintMode((current) => !current)}
+                type="button"
+              >
+                {listenHintMode ? "ヒントを隠す" : "ヒントを表示"}
+              </button>
+
+              <div className="start-bar copy-start-bar">
+                <button
+                  className={listenPhase === "idle" || listenPhase === "ready" ? "primary-button" : "ghost-button"}
+                  disabled={listenPhase === "listening" || listenPhase === "playing"}
+                  onClick={listenPhase === "ready" ? startListenCopyPerformance : startListenCopyRound}
+                  type="button"
+                >
+                  {listenPhase === "idle" ? "スタート" : listenPhase === "ready" ? "やってみる" : "進行中"}
+                </button>
+              </div>
+            </aside>
           </div>
         </section>
       </main>
@@ -1306,17 +2026,24 @@ function App() {
                     <div className="inline-control-row">
                       <button
                         className="ghost-button small"
-                        onClick={() => setSettings((current) => ({ ...current, bpm: Math.max(50, current.bpm - 2) }))}
+                        onClick={() => adjustCopyBpm(-2)}
                         type="button"
                       >
                         -2
                       </button>
                       <button
                         className="ghost-button small"
-                        onClick={() => setSettings((current) => ({ ...current, bpm: Math.min(160, current.bpm + 2) }))}
+                        onClick={() => adjustCopyBpm(2)}
                         type="button"
                       >
                         +2
+                      </button>
+                      <button
+                        className={previewPhraseKey === "copy-rhythm-preview" ? "ghost-button small preview-stop-button" : "ghost-button small"}
+                        onClick={toggleCopyTempoPreview}
+                        type="button"
+                      >
+                        {previewPhraseKey === "copy-rhythm-preview" ? "STOP" : "確認"}
                       </button>
                     </div>
                   ) : null}
@@ -1430,6 +2157,25 @@ function App() {
                 <small>{getCopyExpectedLabel(getCopyExpectedInput(activeStep.pose))}</small>
               </div>
 
+              <div className="copy-input-status">
+                <div className="copy-input-status-item">
+                  <span>手拍子</span>
+                  <strong>{microphone.active ? "有効" : microphone.permission === "denied" ? "許可が必要" : "待機中"}</strong>
+                  <small>
+                    音量 {microphone.level.toFixed(2)} / しきい値 {settings.clapThreshold.toFixed(2)}
+                  </small>
+                  {microphone.error ? <small className="error-text">{microphone.error}</small> : null}
+                </div>
+                <div className="copy-input-status-item">
+                  <span>足踏み</span>
+                  <strong>{camera.active ? "有効" : camera.permission === "denied" ? "許可が必要" : "待機中"}</strong>
+                  <small>
+                    反応 {camera.motionLevel.toFixed(2)} / しきい値 {settings.motionThreshold.toFixed(2)}
+                  </small>
+                  {camera.error ? <small className="error-text">{camera.error}</small> : null}
+                </div>
+              </div>
+
               <div className="status-card gold lesson-control-card copy-side-tempo">
                 <span>テンポ</span>
                 <strong>{settings.bpm} BPM</strong>
@@ -1437,17 +2183,24 @@ function App() {
                   <div className="inline-control-row">
                     <button
                       className="ghost-button small"
-                      onClick={() => setSettings((current) => ({ ...current, bpm: Math.max(50, current.bpm - 2) }))}
+                      onClick={() => adjustCopyBpm(-2)}
                       type="button"
                     >
                       -2
                     </button>
                     <button
                       className="ghost-button small"
-                      onClick={() => setSettings((current) => ({ ...current, bpm: Math.min(160, current.bpm + 2) }))}
+                      onClick={() => adjustCopyBpm(2)}
                       type="button"
                     >
                       +2
+                    </button>
+                    <button
+                      className={previewPhraseKey === "copy-rhythm-preview" ? "ghost-button small preview-stop-button" : "ghost-button small"}
+                      onClick={toggleCopyTempoPreview}
+                      type="button"
+                    >
+                      {previewPhraseKey === "copy-rhythm-preview" ? "STOP" : "確認"}
                     </button>
                   </div>
                 ) : null}
@@ -1710,17 +2463,24 @@ function App() {
                 <div className="inline-control-row">
                   <button
                     className="ghost-button small"
-                    onClick={() => setSettings((current) => ({ ...current, bpm: Math.max(50, current.bpm - 2) }))}
+                    onClick={() => adjustLessonBpm(-2)}
                     type="button"
                   >
                     -2
                   </button>
                   <button
                     className="ghost-button small"
-                    onClick={() => setSettings((current) => ({ ...current, bpm: Math.min(160, current.bpm + 2) }))}
+                    onClick={() => adjustLessonBpm(2)}
                     type="button"
                   >
                     +2
+                  </button>
+                  <button
+                    className={previewPhraseKey === "current-lesson-preview" ? "ghost-button small preview-stop-button" : "ghost-button small"}
+                    onClick={toggleCurrentLessonPreview}
+                    type="button"
+                  >
+                    {previewPhraseKey === "current-lesson-preview" ? "STOP" : "確認"}
                   </button>
                 </div>
               ) : null}
@@ -1798,16 +2558,106 @@ function App() {
   }
 
   function renderResult() {
+    if (selectedMode.id === "copy-rhythm") {
+      const copyCorrectCount = copyResults.filter((result) => result.judgement === "correct").length;
+      const copyMissCount = Math.max(0, copyPattern.length - copyCorrectCount);
+
+      return (
+        <main className="screen screen-result">
+          <section className="wire-box result-screen-card lesson-result-card">
+            <div className="wire-box-header result-header-compact">
+              <div>
+                <p className="eyebrow">Result</p>
+                <h1>結果</h1>
+                <p className="result-player-name">プレイヤー: {currentPlayer?.name ?? "未選択"}</p>
+              </div>
+              <button
+                className="ghost-button"
+                onClick={() =>
+                  saveResultImage({
+                    misses: copyMissCount,
+                    onTime: copyCorrectCount,
+                    totalExpected: copyPattern.length,
+                  })
+                }
+                type="button"
+              >
+                画像保存
+              </button>
+            </div>
+
+            <div className="result-grid">
+              <StatusCard accent="gold" label="できた" value={`${copyCorrectCount}`} />
+              <StatusCard accent="blue" label="ミス" value={`${copyMissCount}`} />
+              <StatusCard accent="green" label="全体" value={`${copyPattern.length}`} />
+            </div>
+
+            <div className="start-bar">
+              <button
+                className="ghost-button"
+                onClick={() => {
+                  setPlayState("idle");
+                  setFeedback({ text: "モードを選んでレッスンを始めます。", tone: "gentle" });
+                  setScreen("modeSelect");
+                }}
+                type="button"
+              >
+                戻る
+              </button>
+              <button
+                className="primary-button"
+                onClick={() => {
+                  setCopyResults([]);
+                  copyResultsRef.current = [];
+                  setScreen("copyRhythm");
+                }}
+                type="button"
+              >
+                もう一回まねっこ
+              </button>
+            </div>
+          </section>
+        </main>
+      );
+    }
+
+    const isListenResult = selectedMode.id === "listen-copy";
+    const resultScorePattern = selectedMode.id === "basic-rhythm" || isListenResult ? settings.pattern : null;
+    const resultComment = getResultComment({
+      early: summary.early,
+      late: summary.late,
+      misses: missCount,
+      onTime: summary.onTime,
+      totalExpected: summary.totalExpected,
+    });
+
     return (
       <main className="screen screen-result">
         <section className="wire-box result-screen-card lesson-result-card">
-          <div className="wire-box-header">
+          <div className="wire-box-header result-header-compact">
             <div>
-              <p className="wire-label">RESULT BOX</p>
-              <p className="eyebrow">Result</p>
-              <h1>レッスン結果</h1>
+              <p className="eyebrow">{getResultTitle()}</p>
+              <h1>結果</h1>
+              <p className="result-player-name">プレイヤー: {currentPlayer?.name ?? "未選択"}</p>
             </div>
-            <span className={`feedback-badge ${feedback.tone}`}>{feedback.text}</span>
+            <button
+              className="ghost-button"
+              onClick={() =>
+                saveResultImage({
+                  misses: missCount,
+                  onTime: summary.onTime,
+                  pattern: resultScorePattern ?? undefined,
+                  totalExpected: summary.totalExpected,
+                })
+              }
+              type="button"
+            >
+              画像保存
+            </button>
+          </div>
+
+          <div className={`result-mini-comment ${resultComment.mood}`}>
+            <strong>{resultComment.title}</strong>
           </div>
 
           <div className="result-grid">
@@ -1817,7 +2667,11 @@ function App() {
             <StatusCard accent="blue" label="ミス" value={`${missCount}`} />
           </div>
 
-          <p className="result-note">基礎リズムモードでは、拍子とレベルを変えながら繰り返し学習できます。</p>
+          {resultScorePattern ? (
+            <section className="answer-score-panel" aria-label="正解の譜面">
+              <BeatGrid caption="" currentBeat={-1} pattern={resultScorePattern} title="正解の譜面" />
+            </section>
+          ) : null}
 
           <div className="start-bar">
             <button
@@ -1825,7 +2679,7 @@ function App() {
               onClick={() => {
                 setPlayState("idle");
                 setFeedback({ text: "モードを選んでレッスンを始めます。", tone: "gentle" });
-                setScreen(selectedMode.id === "basic-rhythm" ? "basicPresetSelect" : "modeSelect");
+                setScreen(selectedMode.id === "basic-rhythm" ? "basicPresetSelect" : isListenResult ? "listenCopy" : "modeSelect");
               }}
               type="button"
             >
@@ -1854,15 +2708,19 @@ function App() {
             ) : null}
             <button
               className="primary-button"
-              onClick={() =>
+              onClick={() => {
+                if (isListenResult) {
+                  setScreen("listenCopy");
+                  return;
+                }
                 openLesson(
                   settings,
                   `${selectedMode.id === "basic-rhythm" ? "同じ譜面" : selectedMode.title} の準備ができました。スタートを押してください。`,
-                )
-              }
+                );
+              }}
               type="button"
             >
-              同じ譜面でもう一度
+              {isListenResult ? "もう一回きいてまね" : "同じ譜面でもう一度"}
             </button>
           </div>
         </section>
@@ -1874,6 +2732,21 @@ function App() {
     const attempts = currentPlayer?.attempts ?? [];
     const clearedCount = attempts.filter((attempt) => attempt.cleared).length;
     const perfectCount = attempts.reduce((total, attempt) => total + attempt.onTime, 0);
+    const getAttemptTitle = (attempt: RhythmAttempt) => {
+      if (attempt.mode === "basic-rhythm") {
+        return "基礎リズム";
+      }
+      if (attempt.mode === "listen-copy") {
+        return "聞いてまね";
+      }
+      return "まねっこリズム";
+    };
+    const getAttemptDetail = (attempt: RhythmAttempt) => {
+      if (attempt.mode === "basic-rhythm") {
+        return `${attempt.meter}拍子 / ${attempt.levelTitle} / 譜面${attempt.phraseIndex + 1}`;
+      }
+      return `${attempt.meter}拍子 / ${attempt.barCount}小節`;
+    };
 
     return (
       <main className="screen screen-result">
@@ -1903,12 +2776,8 @@ function App() {
                     <span className={attempt.cleared ? "record-badge cleared" : "record-badge"}>
                       {attempt.cleared ? "クリア" : "練習中"}
                     </span>
-                    <h3>{attempt.mode === "basic-rhythm" ? "基礎リズム" : "まねっこリズム"}</h3>
-                    <p className="result-note">
-                      {attempt.mode === "basic-rhythm"
-                        ? `${attempt.meter}拍子 / ${attempt.levelTitle} / 譜面${attempt.phraseIndex + 1}`
-                        : `${attempt.meter}拍子 / ${attempt.barCount}小節`}
-                    </p>
+                    <h3>{getAttemptTitle(attempt)}</h3>
+                    <p className="result-note">{getAttemptDetail(attempt)}</p>
                   </div>
                   <strong>
                     ぴったり {attempt.onTime} / {attempt.totalExpected}
@@ -2175,6 +3044,13 @@ function App() {
 
   return (
     <div className="app-shell">
+      <div className="orientation-guard" role="status" aria-live="polite">
+        <div className="orientation-guard-card">
+          <span aria-hidden="true">↻</span>
+          <strong>iPadを横向きにしてください</strong>
+          <p>この教材は横画面で見やすく使えるように調整しています。</p>
+        </div>
+      </div>
       {teacherScreen === "settings"
         ? renderTeacherSettings()
         : teacherScreen === "scoreBuilder"
@@ -2185,11 +3061,13 @@ function App() {
               ? renderBasicPresetSelect()
               : screen === "copyRhythm"
                 ? renderCopyRhythm()
-                : screen === "lesson"
-                  ? renderLesson()
-                  : screen === "records"
-                    ? renderRecords()
-                    : renderResult()}
+                : screen === "listenCopy"
+                  ? renderListenCopy()
+                  : screen === "lesson"
+                    ? renderLesson()
+                    : screen === "records"
+                      ? renderRecords()
+                      : renderResult()}
     </div>
   );
 }

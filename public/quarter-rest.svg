@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 180" role="img" aria-label="quarter rest">
+  <rect width="120" height="180" fill="none"/>
+  <path
+    d="M72 10
+       C58 22 47 35 45 49
+       C43 63 53 72 65 81
+       C80 92 84 105 76 118
+       C69 129 55 134 43 137
+       C57 140 72 148 75 160
+       C78 174 66 181 53 177
+       C41 174 34 164 38 153
+       C41 145 47 141 56 141
+       C62 141 67 144 70 150"
+    fill="none"
+    stroke="#111827"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="15"
+  />
+  <path
+    d="M73 11
+       C69 31 72 50 85 66
+       C92 74 93 83 88 91
+       C74 83 64 69 61 53
+       C58 36 62 22 73 11Z"
+    fill="#111827"
+  />
+</svg>

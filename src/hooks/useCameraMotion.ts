@@ -9,6 +9,7 @@ type CameraMotionOptions = {
 type CameraMotionState = {
   active: boolean;
   supported: boolean;
+  secureContext: boolean;
   motionLevel: number;
   permission: "idle" | "granted" | "denied";
   error: string | null;
@@ -22,6 +23,8 @@ export const useCameraMotion = ({
   threshold,
   onMotion,
 }: CameraMotionOptions): CameraMotionState => {
+  const supported = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
+  const secureContext = typeof window !== "undefined" && window.isSecureContext;
   const [active, setActive] = useState(false);
   const [permission, setPermission] = useState<"idle" | "granted" | "denied">("idle");
   const [motionLevel, setMotionLevel] = useState(0);
@@ -58,6 +61,20 @@ export const useCameraMotion = ({
       return;
     }
     setError(null);
+
+    if (!secureContext) {
+      setPermission("denied");
+      setError("カメラ入力にはHTTPSが必要です。iPadでは http://192.168... からはカメラを使えません。");
+      stop();
+      return;
+    }
+
+    if (!supported) {
+      setPermission("denied");
+      setError("このブラウザではカメラ入力を開始できません。Safariのカメラ許可とHTTPS接続を確認してください。");
+      stop();
+      return;
+    }
 
     try {
       stop();
@@ -105,6 +122,8 @@ export const useCameraMotion = ({
         }
 
         let diffTotal = 0;
+        let lowerDiffTotal = 0;
+        let lowerPixelCount = 0;
         for (let index = 0; index < frame.length; index += 4) {
           const current = (frame[index] + frame[index + 1] + frame[index + 2]) / 3;
           const previous =
@@ -112,15 +131,25 @@ export const useCameraMotion = ({
               lastFrameRef.current[index + 1] +
               lastFrameRef.current[index + 2]) /
             3;
-          diffTotal += Math.abs(current - previous);
+          const diff = Math.abs(current - previous);
+          diffTotal += diff;
+
+          const pixelIndex = index / 4;
+          const row = Math.floor(pixelIndex / canvas.width);
+          if (row >= canvas.height * 0.45) {
+            lowerDiffTotal += diff;
+            lowerPixelCount += 1;
+          }
         }
 
         lastFrameRef.current = new Uint8ClampedArray(frame);
         const averageDiff = diffTotal / (frame.length / 4) / 255;
-        setMotionLevel(averageDiff);
+        const lowerAverageDiff = lowerPixelCount > 0 ? lowerDiffTotal / lowerPixelCount / 255 : 0;
+        const motionSignal = Math.max(averageDiff, lowerAverageDiff * 1.35);
+        setMotionLevel(motionSignal);
 
         const now = performance.now();
-        if (averageDiff > threshold && now - lastMotionRef.current > 320) {
+        if (motionSignal > threshold && now - lastMotionRef.current > 320) {
           lastMotionRef.current = now;
           onMotionRef.current(now);
         }
@@ -133,7 +162,7 @@ export const useCameraMotion = ({
       setError(caught instanceof Error ? caught.message : "カメラを開始できませんでした。");
       stop();
     }
-  }, [enabled, stop, threshold]);
+  }, [enabled, secureContext, stop, supported, threshold]);
 
   useEffect(() => {
     if (!enabled) {
@@ -145,7 +174,8 @@ export const useCameraMotion = ({
 
   return {
     active,
-    supported: typeof navigator !== "undefined" && Boolean(navigator.mediaDevices),
+    supported,
+    secureContext,
     motionLevel,
     permission,
     error,

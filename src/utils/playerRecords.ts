@@ -36,6 +36,19 @@ export type RhythmAttempt =
       misses: number;
       totalExpected: number;
       cleared: boolean;
+    }
+  | {
+      id: string;
+      mode: "listen-copy";
+      playedAt: string;
+      meter: BeatCount;
+      barCount: number;
+      onTime: number;
+      early: number;
+      late: number;
+      misses: number;
+      totalExpected: number;
+      cleared: boolean;
     };
 
 const createId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;

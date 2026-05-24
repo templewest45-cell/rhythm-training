@@ -35,8 +35,8 @@ export const defaultSettings: TeacherSettings = {
   difficulty: "easy",
   showRhythmGuide: true,
   soundVolume: 1.2,
-  clapThreshold: 0.12,
-  motionThreshold: 0.12,
+  clapThreshold: 0.09,
+  motionThreshold: 0.08,
   pattern: createDefaultPattern(4),
 };
 
@@ -87,7 +87,7 @@ export const loadSettings = (): TeacherSettings => {
       beatsPerBar,
       clapThreshold:
         typeof parsed.clapThreshold === "number"
-          ? Math.min(0.45, Math.max(0.06, parsed.clapThreshold))
+          ? Math.min(0.45, Math.max(0.03, parsed.clapThreshold))
           : defaultSettings.clapThreshold,
       soundVolume:
         typeof parsed.soundVolume === "number"

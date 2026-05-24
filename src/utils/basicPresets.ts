@@ -130,6 +130,7 @@ export const BASIC_RHYTHM_PRESETS: BasicRhythmPreset[] = [
         title: "レベル1: 3拍を感じる",
         goals: ["3つのまとまり", "揺れ", "流れ"],
         phrases: [
+          ["quarter", "quarter", "quarter"],
           ["quarter", "rest", "rest"],
           ["quarter", "quarter", "rest"],
           ["quarter", "rest", "quarter"],
