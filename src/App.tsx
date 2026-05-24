@@ -86,6 +86,7 @@ type CopyResult = CopyRhythmStep & {
 };
 type CopyPerformanceBeat = {
   active: boolean;
+  beatDurationMs: number;
   index: number;
   startTime: number;
   expectedInput: CopyExpectedInput;
@@ -373,6 +374,15 @@ function ResultCoach({ comment }: { comment: ResultComment }) {
   );
 }
 
+function ResultCoachCompact({ comment }: { comment: ResultComment }) {
+  return (
+    <div className={`result-coach-compact ${comment.mood}`} aria-live="polite">
+      <img className="result-boy-compact" src={COPY_POSE_SRC.idle} alt="" aria-hidden="true" />
+      <strong>{comment.title}</strong>
+    </div>
+  );
+}
+
 function PhrasePreview({ meter, phrase }: { meter: BeatCount; phrase: NoteValue[] }) {
   return (
     <span className="phrase-preview" aria-label={formatPhrase(phrase, meter)}>
@@ -453,6 +463,7 @@ function App() {
   const copyResultsRef = useRef<CopyResult[]>([]);
   const copyPerformanceBeatRef = useRef<CopyPerformanceBeat>({
     active: false,
+    beatDurationMs: 0,
     index: 0,
     startTime: 0,
     expectedInput: "none",
@@ -790,12 +801,13 @@ function App() {
     return addCopyResult(current.index, judgement);
   }
 
-  function startCopyPerformanceBeat(index: number) {
+  function startCopyPerformanceBeat(index: number, beatDurationMs: number) {
     const step = copyPattern[index] ?? copyPattern[0];
     setCopyBeatIndex(index);
     playCopyPose(step.pose);
     copyPerformanceBeatRef.current = {
       active: true,
+      beatDurationMs,
       index,
       startTime: performance.now(),
       expectedInput: getCopyExpectedInput(step.pose),
@@ -845,7 +857,7 @@ function App() {
       setCopyCountdown(null);
       setCopyPlayPhase("playing");
       setFeedback({ text: "本番です。見本と同じタイミングで動きましょう。", tone: "gentle" });
-      startCopyPerformanceBeat(0);
+      startCopyPerformanceBeat(0, beatDurationMs);
       const performanceStartTime = performance.now();
       let lastStepIndex = 0;
 
@@ -873,7 +885,7 @@ function App() {
         }
 
         lastStepIndex = nextIndex;
-        startCopyPerformanceBeat(nextIndex);
+        startCopyPerformanceBeat(nextIndex, beatDurationMs);
       }, PLAYBACK_TICK_MS);
     }, leadInMs);
   }
@@ -885,13 +897,17 @@ function App() {
     }
 
     const elapsed = event.time - current.startTime;
-    if (elapsed < -judgeWindows.accept || elapsed > judgeWindows.accept) {
+    if (current.expectedInput === "none") {
+      const restGuardStart = Math.min(current.beatDurationMs * 0.35, judgeWindows.accept);
+      const restGuardEnd = current.beatDurationMs - Math.min(current.beatDurationMs * 0.2, judgeWindows.accept);
+      if (event.source === "microphone" && elapsed >= restGuardStart && elapsed <= restGuardEnd) {
+        current.wrongInput = true;
+        setFeedback({ text: "ここは休みです。手拍子を止めましょう。", tone: "retry" });
+      }
       return;
     }
 
-    if (current.expectedInput === "none") {
-      current.wrongInput = true;
-      setFeedback({ text: "ここは止まる拍です。次はじっと待ちましょう。", tone: "retry" });
+    if (elapsed < -judgeWindows.accept || elapsed > judgeWindows.accept) {
       return;
     }
 
@@ -2600,6 +2616,11 @@ function App() {
     if (selectedMode.id === "copy-rhythm") {
       const copyCorrectCount = copyResults.filter((result) => result.judgement === "correct").length;
       const copyMissCount = Math.max(0, copyPattern.length - copyCorrectCount);
+      const resultComment = getResultComment({
+        misses: copyMissCount,
+        onTime: copyCorrectCount,
+        totalExpected: copyPattern.length,
+      });
 
       return (
         <main className="screen screen-result">
@@ -2624,6 +2645,8 @@ function App() {
                 画像保存
               </button>
             </div>
+
+            <ResultCoachCompact comment={resultComment} />
 
             <div className="result-grid">
               <StatusCard accent="gold" label="できた" value={`${copyCorrectCount}`} />
@@ -2695,9 +2718,7 @@ function App() {
             </button>
           </div>
 
-          <div className={`result-mini-comment ${resultComment.mood}`}>
-            <strong>{resultComment.title}</strong>
-          </div>
+          <ResultCoachCompact comment={resultComment} />
 
           <div className="result-grid">
             <StatusCard accent="gold" label="ぴったり" value={`${summary.onTime}`} />

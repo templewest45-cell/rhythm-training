@@ -1305,6 +1305,12 @@ h3 {
   text-align: center;
 }
 
+.basic-level-grid .phrase-preview {
+  justify-content: center;
+  transform-origin: center;
+  width: 100%;
+}
+
 .basic-lesson-shell {
   background: linear-gradient(180deg, #fff5d8, #d99a46 62%, #6a3d16 100%);
   border: 5px solid #3e230c;
@@ -1479,37 +1485,41 @@ h3 {
 .phrase-preview {
   align-items: center;
   display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-height: 34px;
+  flex-wrap: nowrap;
+  gap: 3px;
+  min-height: 26px;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .phrase-token-wrap {
   align-items: center;
   display: inline-flex;
-  gap: 6px;
+  flex: 0 1 auto;
+  gap: 3px;
+  min-width: 0;
 }
 
 .phrase-divider {
   color: #8d5a16;
   font-weight: 900;
-  margin: 0 2px;
+  margin: 0 1px;
 }
 
 .phrase-note-symbol {
   color: #163047;
   display: inline-block;
-  font-size: 1.22rem;
+  font-size: clamp(0.94rem, 1.15vw, 1.14rem);
   font-weight: 900;
-  min-width: 24px;
+  min-width: 18px;
   text-align: center;
 }
 
 .phrase-rest-image {
   display: inline-block;
-  height: 30px;
+  height: 22px;
   object-fit: contain;
-  width: 22px;
+  width: 16px;
 }
 
 .preview-stop-button {
@@ -2137,6 +2147,30 @@ h3 {
 
 .result-mini-comment strong {
   font-size: clamp(1.2rem, 2.4vw, 1.65rem);
+  line-height: 1.2;
+}
+
+.result-coach-compact {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(203, 131, 17, 0.16);
+  border-radius: 14px;
+  color: #163047;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 72px 1fr;
+  padding: 10px 16px;
+}
+
+.result-boy-compact {
+  display: block;
+  height: 86px;
+  object-fit: contain;
+  width: 72px;
+}
+
+.result-coach-compact strong {
+  font-size: clamp(1.2rem, 2.4vw, 1.75rem);
   line-height: 1.2;
 }
 
