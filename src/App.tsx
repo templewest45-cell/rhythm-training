@@ -18,6 +18,7 @@ import type {
 import {
   createSettingsFromBasicLevel,
   formatPhrase,
+  getPhraseTokens,
   getPresetByMeter,
   BASIC_RHYTHM_PRESETS,
 } from "./utils/basicPresets";
@@ -195,6 +196,7 @@ const COPY_POSE_SRC: Record<CopyPoseFrame, string> = {
   wave_right: "/poses/wave_right.png",
   stop: "/poses/stop.png",
 };
+const REST_IMAGE_SRC = "/quarter-rest.png";
 
 const getCopyPoseLabel = (pose: CopyPoseAction) => {
   switch (pose) {
@@ -368,6 +370,23 @@ function ResultCoach({ comment }: { comment: ResultComment }) {
         <p>{comment.message}</p>
       </div>
     </div>
+  );
+}
+
+function PhrasePreview({ meter, phrase }: { meter: BeatCount; phrase: NoteValue[] }) {
+  return (
+    <span className="phrase-preview" aria-label={formatPhrase(phrase, meter)}>
+      {getPhraseTokens(phrase, meter).map(({ divider, id, note }) => (
+        <span className="phrase-token-wrap" key={id}>
+          {divider ? <span className="phrase-divider">|</span> : null}
+          {note === "rest" ? (
+            <img alt="休符" className="phrase-rest-image" src={REST_IMAGE_SRC} />
+          ) : (
+            <span className="phrase-note-symbol">{getNoteSymbol(note)}</span>
+          )}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -1384,7 +1403,16 @@ function App() {
     return "基礎リズム";
   }
 
-  function saveResultImage({
+  async function loadCanvasImage(src: string) {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error(`Failed to load ${src}`));
+      image.src = src;
+    });
+  }
+
+  async function saveResultImage({
     misses,
     onTime,
     pattern,
@@ -1395,6 +1423,9 @@ function App() {
     pattern?: PatternStep[];
     totalExpected: number;
   }) {
+    const restImage = pattern?.some((step) => step.note === "rest" || step.action === "rest")
+      ? await loadCanvasImage(REST_IMAGE_SRC).catch(() => null)
+      : null;
     const canvas = document.createElement("canvas");
     const width = 1200;
     const height = pattern ? 760 : 560;
@@ -1460,9 +1491,17 @@ function App() {
         context.font = "700 18px sans-serif";
         context.fillText(String(index + 1), centerX - 6, scoreY + 22);
         context.fillStyle = "#163047";
-        context.font = "800 44px sans-serif";
+        context.font = "800 52px serif";
         context.textAlign = "center";
-        context.fillText(step.action === "rest" ? "休" : step.action === "step" ? "足" : "手", centerX, scoreY + 110);
+        if (step.note === "rest" || step.action === "rest") {
+          if (restImage) {
+            context.drawImage(restImage, centerX - 18, scoreY + 54, 36, 72);
+          } else {
+            context.fillText("𝄽", centerX, scoreY + 112);
+          }
+        } else {
+          context.fillText(getNoteSymbol(step.note), centerX, scoreY + 112);
+        }
         context.textAlign = "start";
       });
     }
@@ -1766,7 +1805,7 @@ function App() {
                       type="button"
                     >
                       <span className="preset-example-number">譜面 {phraseIdx + 1}</span>
-                      <span>{formatPhrase(phrase, activePreset.meter)}</span>
+                      <PhrasePreview meter={activePreset.meter} phrase={phrase} />
                     </button>
                   ))}
                 </div>
@@ -2408,7 +2447,7 @@ function App() {
               </div>
               <div className="lesson-reference-examples">
                 <div className="preset-example current-phrase">
-                  {formatPhrase(currentLessonPhrase, currentLessonPreset.meter)}
+                  <PhrasePreview meter={currentLessonPreset.meter} phrase={currentLessonPhrase} />
                 </div>
               </div>
             </div>

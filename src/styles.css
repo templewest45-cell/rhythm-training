@@ -1476,6 +1476,42 @@ h3 {
   font-weight: 900;
 }
 
+.phrase-preview {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 34px;
+}
+
+.phrase-token-wrap {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.phrase-divider {
+  color: #8d5a16;
+  font-weight: 900;
+  margin: 0 2px;
+}
+
+.phrase-note-symbol {
+  color: #163047;
+  display: inline-block;
+  font-size: 1.22rem;
+  font-weight: 900;
+  min-width: 24px;
+  text-align: center;
+}
+
+.phrase-rest-image {
+  display: inline-block;
+  height: 30px;
+  object-fit: contain;
+  width: 22px;
+}
+
 .preview-stop-button {
   background: rgba(176, 63, 38, 0.14);
   color: #8c2f1d;

@@ -345,13 +345,18 @@ BASIC_RHYTHM_PRESETS.forEach((preset) => {
   });
 });
 
+export const getPhraseTokens = (phrase: NoteValue[], meter: BeatCount) =>
+  phrase.map((note, index) => ({
+    divider: index > 0 && index % meter === 0,
+    id: `${index}-${note}`,
+    note,
+  }));
+
 export const formatPhrase = (phrase: NoteValue[], meter: BeatCount) =>
-  phrase
-    .map((note, index) => {
-      const symbol =
-        note === "quarter" ? "♩" : note === "eighthPair" ? "♪♪" : note === "half" ? "𝅗𝅥" : "𝄽";
-      const divider = index > 0 && index % meter === 0 ? " | " : " ";
-      return `${divider}${symbol}`;
+  getPhraseTokens(phrase, meter)
+    .map(({ divider, note }) => {
+      const symbol = note === "quarter" ? "♩" : note === "eighthPair" ? "♪♪" : note === "half" ? "𝅗𝅥" : "休";
+      return `${divider ? " | " : " "}${symbol}`;
     })
     .join("")
     .trim();
